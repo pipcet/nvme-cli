@@ -2619,8 +2619,8 @@ static const char *nvme_uuid_to_string(uuid_t uuid)
 	int i;
 
 	for (i = 0; i < 16; i++) {
-		*p++ = hex_digits[(uuid.b[i] & 0xf0) >> 4];
-		*p++ = hex_digits[uuid.b[i] & 0x0f];
+		*p++ = hex_digits[(uuid[i] & 0xf0) >> 4];
+		*p++ = hex_digits[uuid[i] & 0x0f];
 		if (i == 3 || i == 5 || i == 7 || i == 9)
 			*p++ = '-';
 	}
