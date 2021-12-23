@@ -9,6 +9,12 @@ nvme.spec
 nvme-*.tar.gz
 version
 
+ccan/config.h
+ccan/tools/configurator/configurator
+
+subprojects
+!subprojects/*.wrap
+
 cscope.*
 
 /debian/files

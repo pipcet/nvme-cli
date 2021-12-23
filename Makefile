@@ -4,7 +4,10 @@ override CPPFLAGS += -D_GNU_SOURCE -D__CHECK_ENDIAN__ -I.
 LIBUUID = $(shell $(LD) -o /dev/null -luuid >/dev/null 2>&1; echo $$?)
 LIBHUGETLBFS = $(shell $(LD) -o /dev/null -lhugetlbfs >/dev/null 2>&1; echo $$?)
 HAVE_SYSTEMD = $(shell pkg-config --exists libsystemd  --atleast-version=242; echo $$?)
-LIBJSONC = $(shell $(LD) -o /dev/null -ljson-c >/dev/null 2>&1; echo $$?)
+LIBJSONC_14 = $(shell pkg-config --atleast-version=0.14 json-c; echo $$?)
+LIBJSONC = $(shell pkg-config json-c; echo $$?)
+LIBZ = $(shell $(LD) -o /dev/null -lz >/dev/null 2>&1; echo $$?)
+LIBOPENSSL = $(shell pkg-config --atleast-version=1.1.0 openssl; echo $$?)
 NVME = nvme
 INSTALL ?= install
 DESTDIR =
@@ -16,13 +19,17 @@ SYSTEMDDIR ?= $(LIBDIR)/systemd
 UDEVDIR ?= $(SYSCONFDIR)/udev
 UDEVRULESDIR ?= $(UDEVDIR)/rules.d
 DRACUTDIR ?= $(LIBDIR)/dracut
+LIBNVME_DEPS =
 LIBNVMEDIR = libnvme/
-LDFLAGS ?= -L$(LIBNVMEDIR)src/ -lnvme
+LDFLAGS ?=
 LIB_DEPENDS =
+
+CCANDIR=ccan/
+override CFLAGS += -I$(CCANDIR)
 
 ifeq ($(LIBUUID),0)
 	override LDFLAGS += -luuid
-	override CFLAGS += -DLIBUUID
+	override CFLAGS += -DCONFIG_LIBUUID
 	override LIB_DEPENDS += uuid
 endif
 
@@ -32,6 +39,18 @@ ifeq ($(LIBHUGETLBFS),0)
 	override LIB_DEPENDS += hugetlbfs
 endif
 
+ifeq ($(LIBZ),0)
+	override LDFLAGS += -lz
+	override CFLAGS += -DLIBZ
+	override LIB_DEPENDS += zlib
+endif
+
+ifeq ($(LIBOPENSSL),0)
+	override LDFLAGS += -lssl -lcrypto
+	override CFLAGS += -DOPENSSL
+	override LIB_DEPENDS += openssl
+endif
+
 INC=-Iutil
 
 ifeq ($(HAVE_SYSTEMD),0)
@@ -39,9 +58,27 @@ ifeq ($(HAVE_SYSTEMD),0)
 	override CFLAGS += -DHAVE_SYSTEMD
 endif
 
+ifeq ($(LIBJSONC_14), 0)
+	override CFLAGS += -DLIBJSONC_14
+endif
+
 ifeq ($(LIBJSONC), 0)
-	override LDFLAGS += -ljson-c
-	override CFLAGS += -DLIBJSONC
+	override LDFLAGS += $(shell pkg-config --libs json-c)
+	override CFLAGS += $(shell pkg-config --cflags json-c)
+	override CFLAGS += -DCONFIG_JSONC
+endif
+
+ifneq ("$(wildcard $(LIBNVMEDIR)/Makefile)","")
+	override LDFLAGS += -L$(LIBNVMEDIR)src -lnvme
+	override CFLAGS += -I$(LIBNVMEDIR)src
+	override LIBNVME_DEPS += libnvme
+else
+ifeq ($(shell pkg-config --exists libnvme; echo $$?),0)
+	override LDFLAGS += $(shell pkg-config --libs libnvme)
+	override CFLAGS += $(shell pkg-config --cflags libnvme)
+else
+$(error "No libnvme found")
+endif
 endif
 
 RPMBUILD = rpmbuild
@@ -61,7 +98,7 @@ default: $(NVME)
 NVME-VERSION-FILE: FORCE
 	@$(SHELL_PATH) ./NVME-VERSION-GEN
 -include NVME-VERSION-FILE
-override CFLAGS += -DNVME_VERSION='"$(NVME_VERSION)"' -I$(LIBNVMEDIR)src/
+override CFLAGS += -DNVME_VERSION='"$(NVME_VERSION)"'
 
 NVME_DPKG_VERSION=1~`lsb_release -sc`
 
@@ -69,7 +106,8 @@ OBJS := nvme-print.o nvme-rpmb.o \
 	fabrics.o nvme-models.o plugin.o
 
 UTIL_OBJS := util/argconfig.o util/suffix.o util/parser.o \
-	util/cleanup.o
+	util/cleanup.o util/base64.o
+
 ifneq ($(LIBJSONC), 0)
 override UTIL_OBJS += util/json.o
 endif
@@ -97,19 +135,22 @@ PLUGIN_OBJS :=					\
 libnvme:
 	$(MAKE) -C $(LIBNVMEDIR)
 
-nvme: nvme.c nvme.h libnvme $(OBJS) $(PLUGIN_OBJS) $(UTIL_OBJS) NVME-VERSION-FILE
+$(CCANDIR)config.h: $(CCANDIR)tools/configurator/configurator
+	$< > $@
+
+$(CCANDIR)tools/configurator/configurator: $(CCANDIR)tools/configurator/configurator.c
+	$(QUIET_CC)$(CC) -D_GNU_SOURCE $< -o $@
+
+nvme: nvme.o $(LIBNVME_DEPS) $(OBJS) $(PLUGIN_OBJS) $(UTIL_OBJS) NVME-VERSION-FILE
 	$(QUIET_CC)$(CC) $(CPPFLAGS) $(CFLAGS) $(INC) $< -o $(NVME) $(OBJS) $(PLUGIN_OBJS) $(UTIL_OBJS) $(LDFLAGS)
 
 verify-no-dep: nvme.c nvme.h $(OBJS) $(UTIL_OBJS) NVME-VERSION-FILE
 	$(QUIET_CC)$(CC) $(CPPFLAGS) $(CFLAGS) $(INC) $< -o $@ $(OBJS) $(UTIL_OBJS) $(LDFLAGS)
 
-nvme.o: nvme.c nvme.h nvme-print.h util/argconfig.h util/suffix.h fabrics.h
+nvme.o: nvme.c nvme.h nvme-print.h util/argconfig.h util/suffix.h fabrics.h $(CCANDIR)config.h
 	$(QUIET_CC)$(CC) $(CPPFLAGS) $(CFLAGS) $(INC) -c $<
 
-%.o: %.c %.h nvme.h linux/nvme.h nvme-print.h util/argconfig.h
-	$(QUIET_CC)$(CC) $(CPPFLAGS) $(CFLAGS) $(INC) -o $@ -c $<
-
-%.o: %.c nvme.h linux/nvme.h nvme-print.h util/argconfig.h
+%.o: %.c $(CCANDIR)config.h
 	$(QUIET_CC)$(CC) $(CPPFLAGS) $(CFLAGS) $(INC) -o $@ -c $<
 
 doc: $(NVME)
@@ -121,9 +162,11 @@ test:
 all: doc
 
 clean:
-	$(RM) $(NVME) $(OBJS) $(PLUGIN_OBJS) $(UTIL_OBJS) *~ a.out NVME-VERSION-FILE *.tar* nvme.spec version control nvme-*.deb 70-nvmf-autoconnect.conf
+	$(RM) $(NVME) nvme.o $(OBJS) $(PLUGIN_OBJS) $(UTIL_OBJS) *~ a.out NVME-VERSION-FILE *.tar* nvme.spec version control nvme-*.deb 70-nvmf-autoconnect.conf
 	$(MAKE) -C Documentation clean
-	$(MAKE) -C libnvme clean
+	-$(MAKE) -C libnvme clean
+	$(RM) $(CCANDIR)/config.h
+	$(RM) $(CCANDIR)/tools/configurator/configurator
 	$(RM) tests/*.pyc
 	$(RM) verify-no-dep
 

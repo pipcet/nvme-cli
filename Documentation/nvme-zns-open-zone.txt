@@ -8,9 +8,11 @@ nvme-zns-open-zone - Opens one or all zones
 SYNOPSIS
 --------
 [verse]
-'nvme zns open-zone nvme zns id-ctrl' <device> [--namespace-id=<NUM> | -n <NUM>]
-						[--start-lba=<LBA> | -s <LBA>]
-						[--select-all | -a]
+'nvme zns open-zone' <device> [--namespace-id=<NUM> | -n <NUM>]
+			      [--start-lba=<LBA> | -s <LBA>]
+			      [--zrwaa | -r]
+			      [--select-all | -a]
+			      [--timeout=<timeout> | -t <timeout>]
 
 DESCRIPTION
 -----------
@@ -30,11 +32,19 @@ OPTIONS
 
 -s <lba>::
 --start-lba=<lba>::
-	The starting LBA of the zone to open. 
+	The starting LBA of the zone to open.
+
+-r::
+--zrwaa::
+	Allocate Zone Random Write Area to zone
 
 -a::
 --select-all::
 	Select all zones for this action
+
+-t <timeout>::
+--timeout=<timeout>::
+	Override default timeout value. In milliseconds.
 
 EXAMPLES
 --------

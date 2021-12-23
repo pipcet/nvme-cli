@@ -78,9 +78,14 @@ static int compare_fw_version(const char *fw1, const char *fw2)
 int getlogpage_format_type(char *model_name)
 {
     int logpage_format_type = INTEL_FORMAT;
-    const char *boundary_model_name = "P5920"; // Use INTEL_FORMAT from Raisin P5920.
-    if (strncmp(model_name, boundary_model_name, strlen(boundary_model_name)) < 0) {
-        logpage_format_type = MEMBLAZE_FORMAT;
+    const char *boundary_model_name1 = "P"; // MEMBLAZE P7936DT0640M00
+    const char *boundary_model_name2 = "P5920"; // Use INTEL_FORMAT from Raisin P5920.
+    if (0 == strncmp(model_name, boundary_model_name1, strlen(boundary_model_name1)))
+    {
+        if (strncmp(model_name, boundary_model_name2, strlen(boundary_model_name2)) < 0)
+        {
+            logpage_format_type = MEMBLAZE_FORMAT;
+        }
     }
     return logpage_format_type;
 }
@@ -220,8 +225,6 @@ static void show_memblaze_smart_log_new(struct nvme_memblaze_smart_log *s,
     printf("%-32s: %3d%%       %s%u%s%u%s%u\n", STR17_01,  *nm, STR17_03, *raw,
         STR17_04, *(raw+2), STR17_05, *(raw+4));
     /* 18 RAISIN_SI_VD_POWER_LOSS_PROTECTION */
-    get_memblaze_new_smart_info(smart, RAISIN_SI_VD_POWER_LOSS_PROTECTION, nm, raw);
-    printf("%-32s: %3d%%       %"PRIu64"\n", STR18_01, *nm, int48_to_long(raw));
     /* 19 RAISIN_SI_VD_READ_FAIL */
     get_memblaze_new_smart_info(smart, RAISIN_SI_VD_READ_FAIL, nm, raw);
     printf("%-32s: %3d%%       %"PRIu64"\n", STR19_01, *nm, int48_to_long(raw));
@@ -407,7 +410,7 @@ int parse_params(char *str, int number, ...)
             exit(EINVAL);
         }
 
-        if (isalnum(*c) == 0) {
+        if (isalnum((int)*c) == 0) {
             printf("%s is not a valid number\n", c);
             return 1;
         }
@@ -491,7 +494,8 @@ static int mb_get_powermanager_status(int argc, char **argv, struct command *cmd
     fd = parse_and_open(argc, argv, desc, opts);
     if (fd < 0) return fd;
 
-    err = nvme_get_features(fd, feature_id, 0, 0, 0, 0, 0, NULL, &result);
+    err = nvme_get_features(fd, feature_id, 0, 0, 0, 0, 0, NULL,
+			    NVME_DEFAULT_IOCTL_TIMEOUT, &result);
     if (err < 0) {
         perror("get-feature");
     }
@@ -534,7 +538,7 @@ static int mb_set_powermanager_status(int argc, char **argv, struct command *cmd
     if (fd < 0) return fd;
 
     err = nvme_set_features(fd, cfg.feature_id, 0, cfg.value, 0, cfg.save,
-			    0, 0, 0, NULL, &result);
+			    0, 0, 0, NULL, NVME_DEFAULT_IOCTL_TIMEOUT, &result);
     if (err < 0) {
         perror("set-feature");
     }
@@ -592,7 +596,7 @@ static int mb_set_high_latency_log(int argc, char **argv, struct command *cmd, s
     cfg.value = (param1 << MB_FEAT_HIGH_LATENCY_VALUE_SHIFT) | param2;
 
     err = nvme_set_features(fd, cfg.feature_id, 0, cfg.value, 0, 0, 0, 0, 0,
-			    NULL, &result);
+			    NULL, NVME_DEFAULT_IOCTL_TIMEOUT, &result);
     if (err < 0) {
         perror("set-feature");
     }
@@ -829,7 +833,8 @@ static int mb_selective_download(int argc, char **argv, struct command *cmd, str
 	while (fw_size > 0) {
 		xfer = min(xfer, fw_size);
 
-		err = nvme_fw_download(fd, offset, xfer, fw_buf);
+		err = nvme_fw_download(fd, offset, xfer, fw_buf,
+				       NVME_DEFAULT_IOCTL_TIMEOUT, NULL);
 		if (err < 0) {
 			perror("fw-download");
 			goto out;
@@ -1028,7 +1033,7 @@ static int memblaze_clear_error_log(int argc, char **argv, struct command *cmd, 
 
 
     err = nvme_set_features(fd, cfg.feature_id, 0, cfg.value, 0, cfg.save,
-			    0, 0, 0, NULL, &result);
+			    0, 0, 0, NULL, NVME_DEFAULT_IOCTL_TIMEOUT, &result);
     if (err < 0) {
         perror("set-feature");
     }
@@ -1107,7 +1112,8 @@ static int mb_set_lat_stats(int argc, char **argv,
 	switch (option) {
 	case None:
 		err = nvme_get_features(fd, nsid, fid, sel, cdw11, 0,
-					data_len, buf, &result);
+					data_len, buf,
+					NVME_DEFAULT_IOCTL_TIMEOUT, &result);
 		if (!err) {
 			printf(
 				"Latency Statistics Tracking (FID 0x%X) is currently (%i).\n",
@@ -1120,7 +1126,8 @@ static int mb_set_lat_stats(int argc, char **argv,
 	case True:
 	case False:
 	        err = nvme_set_features(fd, fid, nsid, option, cdw12, save,
-					0, 0, data_len, buf, &result);
+					0, 0, data_len, buf,
+					NVME_DEFAULT_IOCTL_TIMEOUT, &result);
 		if (err > 0) {
 			nvme_show_status(err);
 		} else if (err < 0) {

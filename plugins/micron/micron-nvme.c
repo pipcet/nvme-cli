@@ -9,6 +9,7 @@
 #include <string.h>
 #include <libgen.h>
 #include <sys/stat.h>
+#include "common.h"
 #include "nvme.h"
 #include "libnvme.h"
 #include <limits.h>
@@ -30,6 +31,7 @@
 #define C2_log_size 4096
 #define D0_log_size 512
 #define FB_log_size 512
+#define E1_log_size 256
 #define MaxLogChunk 16 * 1024
 #define CommonChunkSize 16 * 4096
 
@@ -39,7 +41,7 @@
 /* Plugin version major_number.minor_number.patch */
 static const char *__version_major = "1";
 static const char *__version_minor = "0";
-static const char *__version_patch = "6";
+static const char *__version_patch = "7";
 
 /* supported models of micron plugin; new models should be added at the end
  * before UNKNOWN_MODEL. Make sure M5410 is first in the list !
@@ -553,7 +555,8 @@ static int micron_selective_download(int argc, char **argv,
     while (fw_size > 0) {
         xfer = min(xfer, fw_size);
 
-        err = nvme_fw_download(fd, offset, xfer, fw_buf);
+        err = nvme_fw_download(fd, offset, xfer, fw_buf,
+			       NVME_DEFAULT_IOCTL_TIMEOUT, NULL);
         if (err < 0) {
             perror("fw-download");
             goto out;
@@ -634,7 +637,8 @@ static int micron_smbus_option(int argc, char **argv,
     }
     else if (!strcmp(opt.option, "status")) {
         cdw10 = opt.value;
-        err = nvme_get_features(fd, fid, 1, 0, cdw10, 0, 0, NULL, &result);
+        err = nvme_get_features(fd, fid, 1, 0, cdw10, 0, 0, NULL,
+				NVME_DEFAULT_IOCTL_TIMEOUT, &result);
         if (err == 0) {
             printf("SMBus status on the drive: %s (returns %s temperature) \n",
                     (result & 1) ? "enabled" : "disabled",
@@ -1096,6 +1100,36 @@ ocp_c0_log_page[] = {
     { "Log Page Version", 2},
     { "Log Page GUID", 16},
 },
+/* Extended SMART log information */
+e1_log_page[] = {
+    { "Reserved", 12},
+    { "Grown Bad Block Count", 4},
+    { "Per Block Max Erase Count", 4},
+    { "Power On Minutes", 4},
+    { "Reserved", 24},
+    { "Write Protect Reason", 4},
+    { "Reserved", 12},
+    { "Drive Capacity", 8},
+    { "Reserved", 8},
+    { "Total Erase Count", 8},
+    { "Lifetime Use Rate", 8},
+    { "Erase Fail Count", 8},
+    { "Reserved", 8},
+    { "Reported UC Errors", 8},
+    { "Reserved", 24},
+    { "Program Fail Count", 16},
+    { "Total Bytes Read", 16},
+    { "Total Bytes Written", 16},
+    { "Reserved", 16},
+    { "TU Size", 4},
+    { "Total Block Stripe Count", 4},
+    { "Free Block Stripe Count", 4},
+    { "Block Stripe Size", 8},
+    { "Reserved", 16},
+    { "User Block Min Erase Count", 4},
+    { "User Block Avg Erase Count", 4},
+    { "User Block Max Erase Count", 4},
+},
 /* Vendor Specific Health Log information */
 fb_log_page[] = {
     { "Physical Media Units Written - TLC",  16, 16 },
@@ -1174,7 +1208,7 @@ static void print_micron_vs_logs(
         sfield = log_page[field].field;
         if (size == 16) {
             if (strstr(sfield, "GUID")) {
-                sprintf(datastr, "0x%lX%lX",
+                sprintf(datastr, "0x%"PRIx64"%"PRIx64"",
                         (uint64_t)le64_to_cpu(*(uint64_t *)(&buf[offset + 8])),
                         (uint64_t)le64_to_cpu(*(uint64_t *)(&buf[offset])));
             } else {
@@ -1365,7 +1399,8 @@ static int micron_nand_stats(int argc, char **argv,
 
     /* pull log details based on the model name */
     sscanf(argv[optind], "/dev/nvme%d", &ctrlIdx);
-    if ((eModel = GetDriveModel(ctrlIdx)) == UNKNOWN_MODEL) {
+    eModel = GetDriveModel(ctrlIdx);
+    if ((eModel == UNKNOWN_MODEL) || (eModel == M51CX)) {
         printf ("Unsupported drive model for vs-nand-stats command\n");
 	err = -1;
         goto out;
@@ -1401,6 +1436,78 @@ out:
     return nvme_status_to_errno(err, false);
 }
 
+static void print_ext_smart_logs_e1(__u8 *buf, bool is_json)
+{
+    struct json_object *root;
+    struct json_object *logPages;
+    struct json_object *stats = NULL;
+    int    field_count = sizeof(e1_log_page)/sizeof(e1_log_page[0]);
+
+    if (is_json) {
+        root = json_create_object();
+        stats = json_create_object();
+        logPages = json_create_array();
+        json_object_add_value_array(root, "SMART Extended Log:0xE1", logPages);
+    }
+    else {
+        printf("SMART Extended Log:0xE1\n");
+    }
+
+    print_micron_vs_logs(buf, e1_log_page, field_count, stats, 0);
+
+    if (is_json) {
+        json_array_add_value_object(logPages, stats);
+        json_print_object(root, NULL);
+        printf("\n");
+        json_free_object(root);
+    }
+}
+
+static int micron_smart_ext_log(int argc, char **argv,
+                                struct command *cmd, struct plugin *plugin)
+{
+    const char *desc = "Retrieve extended SMART logs for the given device ";
+    unsigned int extSmartLog[E1_log_size/sizeof(int)] = { 0 };
+    eDriveModel eModel = UNKNOWN_MODEL;
+    int fd = 0, err = 0, ctrlIdx = 0;
+    bool is_json = true;
+    struct format {
+        char *fmt;
+    };
+    const char *fmt = "output format json|normal";
+    struct format cfg = {
+        .fmt = "json",
+    };
+    OPT_ARGS(opts) = {
+        OPT_FMT("format", 'f', &cfg.fmt, fmt),
+        OPT_END()
+    };
+
+    fd = parse_and_open(argc, argv, desc, opts);
+    if (fd < 0) {
+        printf("\nDevice not found \n");;
+        return -1;
+    }
+    if (strcmp(cfg.fmt, "normal") == 0)
+        is_json = false;
+
+    sscanf(argv[optind], "/dev/nvme%d", &ctrlIdx);
+    if ((eModel = GetDriveModel(ctrlIdx)) != M51CX) {
+        printf ("Unsupported drive model for vs-smart-ext-log command\n");
+        err = -1;
+        goto out;
+    }
+    err = nvme_get_log_simple(fd, 0xE1, E1_log_size, extSmartLog);
+    if (!err) {
+        print_ext_smart_logs_e1((__u8 *)extSmartLog, is_json);
+    }
+
+out:
+    close(fd);
+    if (err > 0)
+        nvme_show_status(err);
+    return nvme_status_to_errno(err, false);
+}
 
 static void GetDriveInfo(const char *strOSDirName, int nFD,
                          struct nvme_id_ctrl *ctrlp)
@@ -1738,7 +1845,8 @@ static int GetFeatureSettings(int fd, const char *dir)
             bufp = NULL;
         }
 
-        err = nvme_get_features(fd, fmap[i].id, 1, 0, 0x0, 0, len, bufp, &attrVal);
+        err = nvme_get_features(fd, fmap[i].id, 1, 0, 0x0, 0, len, bufp,
+				NVME_DEFAULT_IOCTL_TIMEOUT, &attrVal);
         if (err == 0) {
             sprintf(msg, "feature: 0x%X", fmap[i].id);
             WriteData((__u8*)&attrVal, sizeof(attrVal), dir, fmap[i].file, msg);
@@ -2212,14 +2320,16 @@ static int micron_telemetry_cntrl_option(int argc, char **argv,
     }
 
     if (!strcmp(opt.option, "enable")) {
-        err = nvme_set_features(fd, fid, 1, 1, 0, (opt.select & 0x1), 0, 0, 0, 0, &result);
+        err = nvme_set_features(fd, fid, 1, 1, 0, (opt.select & 0x1),
+				0, 0, 0, 0, NVME_DEFAULT_IOCTL_TIMEOUT, &result);
         if (err == 0) {
             printf("successfully set controller telemetry option\n");
         } else {
             printf("Failed to set controller telemetry option\n");
         }
     } else if (!strcmp(opt.option, "disable")) {
-        err = nvme_set_features(fd, fid, 1, 0, 0, (opt.select & 0x1), 0, 0, 0, 0, &result);
+        err = nvme_set_features(fd, fid, 1, 0, 0, (opt.select & 0x1),
+				0, 0, 0, 0, NVME_DEFAULT_IOCTL_TIMEOUT, &result);
         if (err == 0) {
             printf("successfully disabled controller telemetry option\n");
         } else {
@@ -2227,7 +2337,8 @@ static int micron_telemetry_cntrl_option(int argc, char **argv,
         }
     } else if (!strcmp(opt.option, "status")) {
         opt.select &= 0x3;
-        err = nvme_get_features(fd, fid, 1, opt.select, 0, 0, 0, 0, &result);
+        err = nvme_get_features(fd, fid, 1, opt.select, 0, 0, 0, 0,
+				NVME_DEFAULT_IOCTL_TIMEOUT, &result);
         if (err == 0) {
             printf("Controller telemetry option : %s\n",
                     (result) ? "enabled" : "disabled");
@@ -2402,7 +2513,7 @@ static int micron_internal_logs(int argc, char **argv, struct command *cmd,
     // trim spaces out of serial number string */
     int i, j = 0;
     for (i = 0; i < sizeof(ctrl.sn); i++) {
-        if (isblank(ctrl.sn[i]))
+        if (isblank((int)ctrl.sn[i]))
             continue;
         sn[j++] = ctrl.sn[i];
     }

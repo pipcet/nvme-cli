@@ -25,7 +25,9 @@
 #include <sys/socket.h>
 #include <linux/if_alg.h>
 #include <linux/socket.h>
+#include <limits.h>
 
+#include "common.h"
 #include "nvme.h"
 #include "libnvme.h"
 
@@ -266,11 +268,11 @@ struct rpmb_config_block_t {
 
 #define SEND_RPMB_REQ(tgt, size, req) \
 nvme_security_send(fd, 0, tgt, RPMB_NVME_SPSP, 0, RPMB_NVME_SECP, 0, size, \
-		(unsigned char *)(req), NULL)
+		   (unsigned char *)(req), NVME_DEFAULT_IOCTL_TIMEOUT, NULL)
 	
 #define RECV_RPMB_RSP(tgt, size, rsp) \
 nvme_security_receive(fd, 0, tgt, RPMB_NVME_SPSP, 0, RPMB_NVME_SECP, 0, size, \
-		(unsigned char *)(rsp), NULL)
+		      (unsigned char *)(rsp), NVME_DEFAULT_IOCTL_TIMEOUT, NULL)
 	
 /* Initialize nonce value in rpmb request frame */
 static void rpmb_nonce_init(struct rpmb_data_frame_t *req)

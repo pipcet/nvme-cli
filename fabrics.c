@@ -51,6 +51,7 @@
 static char *raw;
 static bool persistent;
 static bool quiet;
+static bool dump_config;
 
 static const char *nvmf_tport		= "transport type";
 static const char *nvmf_traddr		= "transport address";
@@ -60,6 +61,8 @@ static const char *nvmf_htraddr		= "host traddr (e.g. FC WWN's)";
 static const char *nvmf_hiface		= "host interface (for tcp transport)";
 static const char *nvmf_hostnqn		= "user-defined hostnqn";
 static const char *nvmf_hostid		= "user-defined hostid (if default not used)";
+static const char *nvmf_hostkey		= "user-defined dhchap key (if default not used)";
+static const char *nvmf_ctrlkey		= "user-defined dhchap controller key (for bi-directional authentication)";
 static const char *nvmf_nr_io_queues	= "number of io queues to use (default is core count)";
 static const char *nvmf_nr_write_queues	= "number of write queues to use (default 0)";
 static const char *nvmf_nr_poll_queues	= "number of poll queues to use (default 0)";
@@ -82,6 +85,9 @@ static const char *nvmf_config_file	= "Use specified JSON configuration file or 
 	OPT_STRING("host-iface",      'f', "STR", &host_iface,	nvmf_hiface), \
 	OPT_STRING("hostnqn",         'q', "STR", &hostnqn,	nvmf_hostnqn), \
 	OPT_STRING("hostid",          'I', "STR", &hostid,	nvmf_hostid), \
+	OPT_STRING("nqn",             'n', "STR", &subsysnqn,	nvmf_nqn), \
+	OPT_STRING("dhchap-secret",   'S', "STR", &hostkey,     nvmf_hostkey), \
+	OPT_STRING("dhchap-ctrl-secret", 'C', "STR", &ctrlkey,  nvmf_ctrlkey), \
 	OPT_INT("nr-io-queues",       'i', &c.nr_io_queues,       nvmf_nr_io_queues),	\
 	OPT_INT("nr-write-queues",    'W', &c.nr_write_queues,    nvmf_nr_write_queues),\
 	OPT_INT("nr-poll-queues",     'P', &c.nr_poll_queues,     nvmf_nr_poll_queues),	\
@@ -93,8 +99,7 @@ static const char *nvmf_config_file	= "Use specified JSON configuration file or 
 	OPT_FLAG("duplicate-connect", 'D', &c.duplicate_connect,  nvmf_dup_connect),	\
 	OPT_FLAG("disable-sqflow",    'd', &c.disable_sqflow,     nvmf_disable_sqflow),	\
 	OPT_FLAG("hdr-digest",        'g', &c.hdr_digest,         nvmf_hdr_digest),	\
-	OPT_FLAG("data-digest",       'G', &c.data_digest,        nvmf_data_digest)     \
-
+	OPT_FLAG("data-digest",       'G', &c.data_digest,        nvmf_data_digest)	\
 
 static void space_strip_len(int max, char *str)
 {
@@ -124,13 +129,16 @@ static void print_discovery_log(struct nvmf_discovery_log *log, int numrec)
 
 		printf("=====Discovery Log Entry %d======\n", i);
 		printf("trtype:  %s\n", nvmf_trtype_str(e->trtype));
-		printf("adrfam:  %s\n", nvmf_adrfam_str(e->adrfam));
+		printf("adrfam:  %s\n",
+			e->traddr && strlen(e->traddr) ?
+			nvmf_adrfam_str(e->adrfam): "");
 		printf("subtype: %s\n", nvmf_subtype_str(e->subtype));
 		printf("treq:    %s\n", nvmf_treq_str(e->treq));
 		printf("portid:  %d\n", e->portid);
 		printf("trsvcid: %s\n", e->trsvcid);
 		printf("subnqn:  %s\n", e->subnqn);
 		printf("traddr:  %s\n", e->traddr);
+		printf("eflags:  %s\n", nvmf_eflags_str(e->eflags));
 
 		switch (e->trtype) {
 		case NVMF_TRTYPE_RDMA:
@@ -141,7 +149,7 @@ static void print_discovery_log(struct nvmf_discovery_log *log, int numrec)
 			printf("rdma_cms:    %s\n",
 				nvmf_cms_str(e->tsas.rdma.cms));
 			printf("rdma_pkey: 0x%04x\n",
-				e->tsas.rdma.pkey);
+				le16_to_cpu(e->tsas.rdma.pkey));
 			break;
 		case NVMF_TRTYPE_TCP:
 			printf("sectype: %s\n",
@@ -159,12 +167,16 @@ static void json_discovery_log(struct nvmf_discovery_log *log, int numrec)
 
 	root = json_create_object();
 	entries = json_create_array();
-	json_object_add_value_uint(root, "genctr", le64_to_cpu(log->genctr));
+	json_object_add_value_uint64(root, "genctr", le64_to_cpu(log->genctr));
 	json_object_add_value_array(root, "records", entries);
 
 	for (i = 0; i < numrec; i++) {
 		struct nvmf_disc_log_entry *e = &log->entries[i];
 		struct json_object *entry = json_create_object();
+
+		nvme_strip_spaces(e->trsvcid, NVMF_TRSVCID_SIZE);
+		nvme_strip_spaces(e->subnqn, NVMF_NQN_SIZE);
+		nvme_strip_spaces(e->traddr, NVMF_TRADDR_SIZE);
 
 		json_object_add_value_string(entry, "trtype",
 					     nvmf_trtype_str(e->trtype));
@@ -174,11 +186,12 @@ static void json_discovery_log(struct nvmf_discovery_log *log, int numrec)
 					     nvmf_subtype_str(e->subtype));
 		json_object_add_value_string(entry,"treq",
 					     nvmf_treq_str(e->treq));
-		json_object_add_value_uint(entry, "portid", e->portid);
-		json_object_add_value_string(entry, "trsvcid",
-					     e->trsvcid);
+		json_object_add_value_uint(entry, "portid",
+					   le16_to_cpu(e->portid));
+		json_object_add_value_string(entry, "trsvcid", e->trsvcid);
 		json_object_add_value_string(entry, "subnqn", e->subnqn);
 		json_object_add_value_string(entry, "traddr", e->traddr);
+		json_object_add_value_uint(entry, "eflags", e->eflags);
 
 		switch (e->trtype) {
 		case NVMF_TRTYPE_RDMA:
@@ -189,7 +202,7 @@ static void json_discovery_log(struct nvmf_discovery_log *log, int numrec)
 			json_object_add_value_string(entry, "rdma_cms",
 				nvmf_cms_str(e->tsas.rdma.cms));
 			json_object_add_value_uint(entry, "rdma_pkey",
-				e->tsas.rdma.pkey);
+				le16_to_cpu(e->tsas.rdma.pkey));
 			break;
 		case NVMF_TRTYPE_TCP:
 			json_object_add_value_string(entry, "sectype",
@@ -225,6 +238,23 @@ static void save_discovery_log(char *raw, struct nvmf_discovery_log *log)
 		printf("Discovery log is saved to %s\n", raw);
 
 	close(fd);
+}
+
+static void print_connect_msg(nvme_ctrl_t c)
+{
+	printf("device: %s\n", nvme_ctrl_get_name(c));
+}
+
+static void json_connect_msg(nvme_ctrl_t c)
+{
+	struct json_object *root;
+
+	root = json_create_object();
+	json_object_add_value_string(root, "device", nvme_ctrl_get_name(c));
+
+	json_print_object(root, NULL);
+	printf("\n");
+	json_free_object(root);
 }
 
 static int __discover(nvme_ctrl_t c, const struct nvme_fabrics_config *defcfg,
@@ -296,19 +326,31 @@ static int discover_from_conf_file(nvme_host_t h, const char *desc,
 {
 	char *transport = NULL, *traddr = NULL, *trsvcid = NULL;
 	char *host_traddr = NULL, *host_iface = NULL;
-	char *hostnqn = NULL, *hostid = NULL;
+	char *hostnqn = NULL, *hostid = NULL, *hostkey = NULL, *ctrlkey = NULL;
+	char *subsysnqn = NULL;
 	char *ptr, **argv, *p, line[4096];
 	int argc, ret = 0;
+	unsigned int verbose = 0;
 	FILE *f;
-
-	struct nvme_fabrics_config cfg = {
-		.tos = -1,
-		.ctrl_loss_tmo = NVMF_DEF_CTRL_LOSS_TMO,
-	};
+	enum nvme_print_flags flags;
+	char *format = "normal";
+	struct nvme_fabrics_config cfg;
 
 	OPT_ARGS(opts) = {
 		NVMF_OPTS(cfg),
+		OPT_FMT("output-format", 'o', &format,        output_format),
+		OPT_FILE("raw",          'r', &raw,           "save raw output to file"),
+		OPT_FLAG("persistent",   'p', &persistent,    "persistent discovery connection"),
+		OPT_FLAG("quiet",        'S', &quiet,         "suppress already connected errors"),
+		OPT_INCR("verbose",      'v', &verbose,       "Increase logging verbosity"),
+		OPT_END()
 	};
+
+	nvmf_default_config(&cfg);
+
+	ret = flags = validate_output_format(format);
+	if (ret < 0)
+		return ret;
 
 	f = fopen(PATH_NVMF_DISC, "r");
 	if (f == NULL) {
@@ -337,22 +379,25 @@ static int discover_from_conf_file(nvme_host_t h, const char *desc,
 		argv[argc] = NULL;
 
 		memcpy(&cfg, defcfg, sizeof(cfg));
+		subsysnqn = NVME_DISC_SUBSYS_NAME;
 		ret = argconfig_parse(argc, argv, desc, opts);
 		if (ret)
 			goto next;
-
+		if (persistent && !cfg.keep_alive_tmo)
+			cfg.keep_alive_tmo = 30;
 		if (!transport && !traddr)
 			goto next;
 
-		c = nvme_create_ctrl(NVME_DISC_SUBSYS_NAME, transport,
+		c = nvme_create_ctrl(subsysnqn, transport,
 				     traddr, host_traddr, host_iface, trsvcid);
 		if (!c)
 			goto next;
+		nvme_ctrl_set_discovery_ctrl(c, true);
 		errno = 0;
 		ret = nvmf_add_ctrl(h, c, &cfg, false);
 		if (!ret) {
-			__discover(c, defcfg, NULL, persistent,
-				   connect, 0);
+			__discover(c, &cfg, raw, connect,
+				   persistent, flags);
 			if (!persistent)
 				ret = nvme_disconnect_ctrl(c);
 			nvme_free_ctrl(c);
@@ -368,8 +413,8 @@ out:
 
 int nvmf_discover(const char *desc, int argc, char **argv, bool connect)
 {
-	char *nqn = NVME_DISC_SUBSYS_NAME;
-	char *hostnqn = NULL, *hostid = NULL;
+	char *subsysnqn = NVME_DISC_SUBSYS_NAME;
+	char *hostnqn = NULL, *hostid = NULL, *hostkey = NULL, *ctrlkey = NULL;
 	char *host_traddr = NULL, *host_iface = NULL;
 	char *transport = NULL, *traddr = NULL, *trsvcid = NULL;
 	char *hnqn = NULL, *hid = NULL;
@@ -381,11 +426,7 @@ int nvmf_discover(const char *desc, int argc, char **argv, bool connect)
 	unsigned int verbose = 0;
 	int ret;
 	char *format = "normal";
-
-	struct nvme_fabrics_config cfg = {
-		.tos = -1,
-	};
-
+	struct nvme_fabrics_config cfg;
 	char *device = NULL;
 
 	OPT_ARGS(opts) = {
@@ -395,10 +436,13 @@ int nvmf_discover(const char *desc, int argc, char **argv, bool connect)
 		OPT_FILE("raw",          'r', &raw,           "save raw output to file"),
 		OPT_FLAG("persistent",   'p', &persistent,    "persistent discovery connection"),
 		OPT_FLAG("quiet",        'S', &quiet,         "suppress already connected errors"),
-		OPT_STRING("config",     'C', "FILE", &config_file, nvmf_config_file),
+		OPT_STRING("config",     'J', "FILE", &config_file, nvmf_config_file),
 		OPT_INCR("verbose",      'v', &verbose,       "Increase logging verbosity"),
+		OPT_FLAG("dump-config",  'O', &dump_config,   "Dump configuration file to stdout"),
 		OPT_END()
 	};
+
+	nvmf_default_config(&cfg);
 
 	ret = argconfig_parse(argc, argv, desc, opts);
 	if (ret)
@@ -427,6 +471,7 @@ int nvmf_discover(const char *desc, int argc, char **argv, bool connect)
 
 	if (!strcmp(config_file, "none"))
 		config_file = NULL;
+
 	r = nvme_scan(config_file);
 	if (persistent && !cfg.keep_alive_tmo)
 		cfg.keep_alive_tmo = 30;
@@ -445,6 +490,8 @@ int nvmf_discover(const char *desc, int argc, char **argv, bool connect)
 		else if (!strncmp(device, "/dev/", 5))
 			device += 5;
 	}
+	if (hostkey)
+		nvme_host_set_dhchap_key(h, hostkey);
 
 	if (!device && !transport && !traddr) {
 		ret = discover_from_conf_file(h, desc, connect, &cfg);
@@ -455,7 +502,7 @@ int nvmf_discover(const char *desc, int argc, char **argv, bool connect)
 		c = nvme_scan_ctrl(r, device);
 		if (c) {
 			/* Check if device matches command-line options */
-			if (strcmp(nvme_ctrl_get_subsysnqn(c), nqn) ||
+			if (strcmp(nvme_ctrl_get_subsysnqn(c), subsysnqn) ||
 			    strcmp(nvme_ctrl_get_transport(c), transport) ||
 			    strcmp(nvme_ctrl_get_traddr(c), traddr) ||
 			    (host_traddr && nvme_ctrl_get_host_traddr(c) &&
@@ -493,12 +540,13 @@ int nvmf_discover(const char *desc, int argc, char **argv, bool connect)
 	}
 	if (!c) {
 		/* No device or non-matching device, create a new controller */
-		c = nvme_create_ctrl(nqn, transport, traddr,
+		c = nvme_create_ctrl(subsysnqn, transport, traddr,
 				     host_traddr, host_iface, trsvcid);
 		if (!c) {
 			ret = errno;
 			goto out_free;
 		}
+		nvme_ctrl_set_discovery_ctrl(c, true);
 		ret = nvmf_add_ctrl(h, c, &cfg, false);
 		if (ret) {
 			nvme_msg(LOG_ERR,
@@ -520,6 +568,8 @@ out_free:
 		free(hnqn);
 	if (hid)
 		free(hid);
+	if (dump_config)
+		nvme_dump_config(r);
 	nvme_free_tree(r);
 
 	return ret;
@@ -532,29 +582,40 @@ int nvmf_connect(const char *desc, int argc, char **argv)
 	char *transport = NULL, *traddr = NULL;
 	char *host_traddr = NULL, *host_iface = NULL;
 	char *trsvcid = NULL, *hostnqn = NULL, *hostid = NULL;
+	char *hostkey = NULL, *ctrlkey = NULL;
 	char *config_file = PATH_NVMF_CONFIG;
 	unsigned int verbose = 0;
 	nvme_root_t r;
 	nvme_host_t h;
 	nvme_ctrl_t c;
 	int ret;
-
-	struct nvme_fabrics_config cfg = {
-		.tos = -1,
-		.ctrl_loss_tmo = NVMF_DEF_CTRL_LOSS_TMO,
-	};
+	struct nvme_fabrics_config cfg;
+	enum nvme_print_flags flags = -1;
+	char *format = "";
 
 	OPT_ARGS(opts) = {
-		OPT_STRING("nqn", 'n', "NAME", &subsysnqn, nvmf_nqn),
 		NVMF_OPTS(cfg),
-		OPT_STRING("config", 'C', "FILE", &config_file, nvmf_config_file),
+		OPT_STRING("config", 'J', "FILE", &config_file, nvmf_config_file),
 		OPT_INCR("verbose", 'v', &verbose, "Increase logging verbosity"),
+		OPT_FLAG("dump-config", 'O', &dump_config, "Dump JSON configuration to stdout"),
+		OPT_FMT("output-format", 'o', &format, "Output format: normal|json"),
 		OPT_END()
 	};
+
+	nvmf_default_config(&cfg);
 
 	ret = argconfig_parse(argc, argv, desc, opts);
 	if (ret)
 		return ret;
+
+	if (!strcmp(format, ""))
+		flags = -1;
+	else if (!strcmp(format, "normal"))
+		flags = NORMAL;
+	else if (!strcmp(format, "json"))
+		flags = JSON;
+	else
+		return EINVAL;
 
 	switch (verbose) {
 	case 0:
@@ -592,8 +653,9 @@ int nvmf_connect(const char *desc, int argc, char **argv)
 		}
 	}
 
-	if (strcmp(config_file, "none"))
+	if (!strcmp(config_file, "none"))
 		config_file = NULL;
+
 	r = nvme_scan(config_file);
 	if (!hostnqn)
 		hostnqn = hnqn = nvmf_hostnqn_from_file();
@@ -604,22 +666,35 @@ int nvmf_connect(const char *desc, int argc, char **argv)
 		errno = ENOMEM;
 		goto out_free;
 	}
+	if (hostkey)
+		nvme_host_set_dhchap_key(h, hostkey);
 	c = nvme_create_ctrl(subsysnqn, transport, traddr,
 			     host_traddr, host_iface, trsvcid);
 	if (!c) {
 		errno = ENOMEM;
 		goto out_free;
 	}
+	if (ctrlkey)
+		nvme_ctrl_set_dhchap_key(c, ctrlkey);
 
 	errno = 0;
 	ret = nvmf_add_ctrl(h, c, &cfg, cfg.disable_sqflow);
 	if (ret)
 		nvme_msg(LOG_ERR, "no controller found\n");
+	else {
+		if (flags == NORMAL)
+			print_connect_msg(c);
+		else if (flags == JSON)
+			json_connect_msg(c);
+	}
+
 out_free:
 	if (hnqn)
 		free(hnqn);
 	if (hid)
 		free(hid);
+	if (dump_config)
+		nvme_dump_config(r);
 	nvme_free_tree(r);
 	return errno;
 }

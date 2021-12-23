@@ -446,7 +446,7 @@ static int get_temp_stats_log(int argc, char **argv, struct command *cmd, struct
 	struct intel_temp_stats stats;
 	int err, fd;
 
-	const char *desc = "Get Intel Marketing Name log and show it.";
+	const char *desc = "Get Temperature Statistics log and show it.";
 	const char *raw = "dump output in binary format";
 	struct config {
 		int  raw_binary;
@@ -522,7 +522,7 @@ enum FormatUnit {
 #define US_IN_S 1000000
 #define US_IN_MS 1000
 
-static const enum FormatUnit get_seconds_magnitude(__u32 microseconds)
+static enum FormatUnit get_seconds_magnitude(__u32 microseconds)
 {
 	if (microseconds > US_IN_S)
 		return S;
@@ -532,7 +532,7 @@ static const enum FormatUnit get_seconds_magnitude(__u32 microseconds)
 		return US;
 }
 
-static const float convert_seconds(__u32 microseconds)
+static float convert_seconds(__u32 microseconds)
 {
 	float divisor = 1.0;
 
@@ -560,13 +560,15 @@ enum inf_bound_type {
  * either of "-INF" or "+INF", respectively.
  */
 static void set_unit_string(char *buffer, __u32 microseconds,
-	enum FormatUnit unit, enum inf_bound_type bound_type)
+			    enum FormatUnit unit,
+			    enum inf_bound_type bound_type)
 {
+	char *string;
+
 	if (bound_type != NOINF) {
-		snprintf(buffer, 5, "%s", bound_type ? "+INF" : "-INF");
+		snprintf(buffer, BUFSIZE, "%s", bound_type ? "+INF" : "-INF");
 		return;
 	}
-	char *string;
 
 	switch (unit) {
 	case US:
@@ -582,8 +584,9 @@ static void set_unit_string(char *buffer, __u32 microseconds,
 		string = "_s";
 		break;
 	}
-	snprintf(buffer, 11, "%4.2f%s",
-		convert_seconds(microseconds), string);
+
+	snprintf(buffer, BUFSIZE, "%4.2f%s", convert_seconds(microseconds),
+		 string);
 }
 
 static void init_buffer(char *buffer, size_t size)
@@ -1066,7 +1069,8 @@ static int get_lat_stats_log(int argc, char **argv, struct command *cmd, struct 
 		__u32 result;
 
 		err = nvme_get_features(fd, 0xf7, 0, 0, cfg.write ? 0x1 : 0x0, 0,
-				       sizeof(thresholds), thresholds, &result);
+				       sizeof(thresholds), thresholds,
+					NVME_DEFAULT_IOCTL_TIMEOUT, &result);
 		if (err) {
 			fprintf(stderr, "Quering thresholds failed. ");
 			nvme_show_status(err);
@@ -1548,7 +1552,7 @@ static int enable_lat_stats_tracking(int argc, char **argv,
 	switch (option) {
 	case None:
 		err = nvme_get_features(fd, fid, nsid, sel, cdw11, 0, data_len, buf,
-					&result);
+					NVME_DEFAULT_IOCTL_TIMEOUT, &result);
 		if (!err) {
 			printf(
 				"Latency Statistics Tracking (FID 0x%X) is currently (%i).\n",
@@ -1561,7 +1565,8 @@ static int enable_lat_stats_tracking(int argc, char **argv,
 	case True:
 	case False:
 		err = nvme_set_features(fd, fid, nsid, option, cdw12, save, 0,
-					0, data_len, buf, &result);
+					0, data_len, buf,
+					NVME_DEFAULT_IOCTL_TIMEOUT, &result);
 		if (err > 0) {
 			nvme_show_status(err);
 		} else if (err < 0) {
@@ -1640,7 +1645,8 @@ static int set_lat_stats_thresholds(int argc, char **argv,
 
 		err = nvme_set_features(fd, fid, nsid, cfg.write ? 0x1 : 0x0,
 					cdw12, save, 0, 0, sizeof(thresholds),
-					thresholds, &result);
+					thresholds, NVME_DEFAULT_IOCTL_TIMEOUT,
+					&result);
 
 		if (err > 0) {
 			nvme_show_status(err);

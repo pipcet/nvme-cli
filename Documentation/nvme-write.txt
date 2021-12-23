@@ -26,6 +26,8 @@ SYNOPSIS
 			[--show-command | -v]
 			[--dry-run | -w]
 			[--latency | -t]
+			[--storage-tag-check<storage-tag-check> | -C <storage-tag-check>]
+			[--force]
 
 DESCRIPTION
 -----------
@@ -135,6 +137,15 @@ metadata is passes.
 -t::
 --latency::
 	Print out the latency the IOCTL took (in us).
+
+--storage-tag-check=<storage-tag-check>::
+-C <storage-tag-check>::
+	This bit specifies the Storage Tag field shall be checked as part of end-to-end
+	data protection processing.
+
+--force::
+    Ignore namespace is currently busy and perfome the operation
+    even though.
 
 EXAMPLES
 --------

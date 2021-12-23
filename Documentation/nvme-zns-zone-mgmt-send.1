@@ -1,13 +1,13 @@
 '\" t
 .\"     Title: nvme-zns-zone-mgmt-send
-.\"    Author: [FIXME: author] [see http://www.docbook.org/tdg5/en/html/author]
-.\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: 10/20/2020
+.\"    Author: [FIXME: author] [see http://docbook.sf.net/el/author]
+.\" Generator: DocBook XSL Stylesheets v1.78.1 <http://docbook.sf.net/>
+.\"      Date: 12/08/2021
 .\"    Manual: NVMe Manual
 .\"    Source: NVMe
 .\"  Language: English
 .\"
-.TH "NVME\-ZNS\-ZONE\-MGM" "1" "10/20/2020" "NVMe" "NVMe Manual"
+.TH "NVME\-ZNS\-ZONE\-MGM" "1" "12/08/2021" "NVMe" "NVMe Manual"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -34,10 +34,12 @@ nvme-zns-zone-mgmt-send \- Zone Management Send command
 .nf
 \fInvme zns zone\-mgmt\-send\fR <device> [\-\-namespace\-id=<NUM> | \-n <NUM>]
                                    [\-\-start\-lba=<IONUM>, \-s <IONUM>]
+                                   [\-\-zsaso, \-o]
                                    [\-\-select\-all, \-a]
                                    [\-\-zsa=<NUM>, \-z <NUM>]
                                    [\-\-data\-len=<IONUM>, \-l <IONUM>]
-                                   [\-data=<FILE>, \-d <FILE>]
+                                   [\-\-data=<FILE>, \-d <FILE>]
+                                   [\-\-timeout=<timeout> | \-t <timeout>]
 .fi
 .SH "DESCRIPTION"
 .sp
@@ -59,6 +61,11 @@ The starting LBA of the zone to manage send\&.
 Send data buffer length
 .RE
 .PP
+\-o, \-\-zsaso
+.RS 4
+Zone Send Action Specific Option
+.RE
+.PP
 \-\-select\-all, \-a
 .RS 4
 Send command to all zones
@@ -74,9 +81,14 @@ Zone send action\&.
 Buffer length if data required
 .RE
 .PP
-\-d <FILE, \-data=<FILE>
+\-d <FILE, \-\-data=<FILE>
 .RS 4
 Optional file for data (default stdin)
+.RE
+.PP
+\-t <timeout>, \-\-timeout=<timeout>
+.RS 4
+Override default timeout value\&. In milliseconds\&.
 .RE
 .SH "EXAMPLES"
 .sp

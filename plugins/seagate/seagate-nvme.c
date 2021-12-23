@@ -28,6 +28,7 @@
 #include <inttypes.h>
 #include <sys/stat.h>
 #include <ctype.h>
+#include "common.h"
 #include "nvme.h"
 #include "libnvme.h"
 #include "plugin.h"
@@ -1126,8 +1127,10 @@ static int get_host_tele(int argc, char **argv, struct command *cmd, struct plug
 
 		memset(log, 0, blksToGet * 512);
 
-		err = nvme_get_log(fd, cfg.log_id, cfg.namespace_id, offset, 0, 0, true,
-				   0, 0, blksToGet * 512, (void *)log);
+		err = nvme_get_log(fd, cfg.log_id, cfg.namespace_id, offset,
+				   0, 0, true, 0, NVME_CSI_NVM, false,
+				   blksToGet * 512, (void *)log,
+				   NVME_DEFAULT_IOCTL_TIMEOUT, NULL);
 		if (!err) {
 			offset += blksToGet * 512;
 
@@ -1222,8 +1225,10 @@ static int get_ctrl_tele(int argc, char **argv, struct command *cmd, struct plug
 
 		memset(log, 0, blksToGet * 512);
 
-		err = nvme_get_log(fd, log_id, cfg.namespace_id, offset, 0, 0, true,
-				   0, 0, blksToGet * 512, (void *)log);
+		err = nvme_get_log(fd, log_id, cfg.namespace_id, offset, 0, 0,
+				   true, 0, NVME_CSI_NVM, false,
+				   blksToGet * 512, (void *)log,
+				   NVME_DEFAULT_IOCTL_TIMEOUT, NULL);
 		if (!err) {
 			offset += blksToGet * 512;
 
@@ -1340,8 +1345,10 @@ static int vs_internal_log(int argc, char **argv, struct command *cmd, struct pl
 
 		memset(log, 0, blksToGet * 512);
 
-		err = nvme_get_log(fd, log_id, cfg.namespace_id, offset, 0, 0, true,
-				   0, 0, blksToGet * 512, (void *)log);
+		err = nvme_get_log(fd, log_id, cfg.namespace_id, offset, 0, 0,
+				   true, 0, NVME_CSI_NVM, false,
+				   blksToGet * 512, (void *)log,
+				   NVME_DEFAULT_IOCTL_TIMEOUT, NULL);
 		if (!err) {
 			offset += blksToGet * 512;
 

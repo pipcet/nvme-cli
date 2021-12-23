@@ -10,6 +10,7 @@ SYNOPSIS
 [verse]
 'nvme connect-all'
 		[--transport=<trtype>     | -t <trtype>]
+		[--nqn=<subnqn>           | -n <subnqn>]
 		[--traddr=<traddr>        | -a <traddr>]
 		[--trsvcid=<trsvcid>      | -s <trsvcid>]
 		[--host-traddr=<traddr>   | -w <traddr>]
@@ -17,6 +18,7 @@ SYNOPSIS
 		[--hostnqn=<hostnqn>      | -q <hostnqn>]
 		[--hostid=<hostid>        | -I <hostid>]
 		[--raw=<filename>         | -r <filename>]
+		[--cfg-file=<cfg>         | -C <cfg>]
 		[--keep-alive-tmo=<#>     | -k <#>]
 		[--reconnect-delay=<#>    | -c <#>]
 		[--ctrl-loss-tmo=<#>	  | -l <#>]
@@ -29,6 +31,7 @@ SYNOPSIS
 		[--matching               | -m]
 		[--persistent             | -p]
 		[--quiet                  | -S]
+		[--dump-config            | -O]
 
 DESCRIPTION
 -----------
@@ -62,6 +65,10 @@ OPTIONS
 |tcp |The network fabric is a TCP/IP network.
 |loop|Connect to a NVMe over Fabrics target on the local host
 |=================
+
+-n <subnqn>::
+--nqn <subnqn>::
+	This field specifies the name for the NVMe subsystem to connect to.
 
 -a <traddr>::
 --traddr=<traddr>::
@@ -107,6 +114,14 @@ OPTIONS
 	This field will take the output of the 'nvme connect-all' command
 	and dump it to a raw binary file. By default 'nvme connect-all' will
 	dump the output to stdout.
+
+-C <cfg>::
+--config-file=<cfg>::
+	Use the specified JSON configuration file instead of the
+	default /etc/nvme/config.json file or 'none' to not read in
+	an existing configuration file. The JSON configuration file
+	format is documented in
+	https://github.com/linux-nvme/libnvme/doc/config-schema.json
 
 -k <#>::
 --keep-alive-tmo=<#>::
@@ -165,6 +180,10 @@ OPTIONS
 -S::
 --quiet::
 	Suppress error messages.
+
+-O::
+--dump-config::
+	Print out resulting JSON configuration file to stdout.
 
 
 EXAMPLES
